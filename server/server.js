@@ -8,10 +8,15 @@ const app = express();
 
 // 1. SECURITY: Restrict CORS to your frontend only
 // If CLIENT_URL isn't set, it allows all (useful for local testing)
-const corsOptions = {
-  origin: process.env.CLIENT_URL || "*", 
-  optionsSuccessStatus: 200
-};
+app.use(cors({
+  origin: [
+    "https://debate-gpt-six.vercel.app", // Your live Vercel frontend
+    "http://localhost:5173",             // Local Vite dev port
+    "http://localhost:3000"              // Alternative local port
+  ],
+  methods: ["GET", "POST"],
+  credentials: true
+}));
 app.use(cors(corsOptions));
 app.use(express.json());
 
