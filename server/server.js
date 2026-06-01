@@ -6,8 +6,7 @@ dotenv.config();
 
 const app = express();
 
-// 1. SECURITY: Restrict CORS to your frontend only
-// If CLIENT_URL isn't set, it allows all (useful for local testing)
+// 🔓 SECURITY: Restrict CORS to your trusted domains
 app.use(cors({
   origin: [
     "https://debate-gpt-six.vercel.app", // Your live Vercel frontend
@@ -17,7 +16,9 @@ app.use(cors({
   methods: ["GET", "POST"],
   credentials: true
 }));
-app.use(cors(corsOptions));
+
+// ⛔ (REMOVED the duplicate app.use(cors(corsOptions)) line that was causing the crash)
+
 app.use(express.json());
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
