@@ -5,25 +5,46 @@ import dotenv from "dotenv";
 dotenv.config();
 
 const app = express();
-app.use(cors());
+
+// 1. SECURITY: Restrict CORS to your frontend only
+// If CLIENT_URL isn't set, it allows all (useful for local testing)
+const corsOptions = {
+  origin: process.env.CLIENT_URL || "*", 
+  optionsSuccessStatus: 200
+};
+app.use(cors(corsOptions));
 app.use(express.json());
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 app.post("/api/debate", async (req, res) => {
-  const { messages, system } = req.body;
+  try {
+    const { messages, system } = req.body;
 
-  const response = await groq.chat.completions.create({
-    model: "llama-3.3-70b-versatile",
-    messages: [
-      { role: "system", content: system },
-      ...messages,
-    ],
-    max_tokens: 1000,
-  });
+    // Optional: Add a quick validation check
+    if (!messages || !Array.isArray(messages)) {
+      return res.status(400).json({ error: "Invalid messages format." });
+    }
 
-  const reply = response.choices[0]?.message?.content || "No response.";
-  res.json({ reply });
+    const response = await groq.chat.completions.create({
+      model: "llama-3.3-70b-versatile",
+      messages: [
+        { role: "system", content: system },
+        ...messages,
+      ],
+      max_tokens: 1000,
+    });
+
+    const reply = response.choices[0]?.message?.content || "No response.";
+    res.json({ reply });
+    
+  } catch (error) {
+    // 2. STABILITY: Prevent the server from crashing if Groq fails
+    console.error("Groq API Error:", error);
+    res.status(500).json({ error: "Failed to fetch response from AI." });
+  }
 });
 
-app.listen(5000, () => console.log("✅ Server running on port 5000"));
+// 3. DEPLOYMENT: Listen to the cloud provider's dynamic port
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => console.log(`✅ Server running on port ${PORT}`));
