@@ -33,15 +33,15 @@ const DebateChat = () => {
   }, [messages, isLoading]);
 
   // Send opening argument automatically on first load
- useEffect(() => {
-  if (!hasStarted.current && topic && argument && personality) {
-    hasStarted.current = true;  // ← ref update doesn't trigger re-render
-    addMessage("user", argument);
-    sendToAI(argument, []);
-  }
-}, []);
+  useEffect(() => {
+    if (!hasStarted.current && topic && argument && personality) {
+      hasStarted.current = true;
+      addMessage("user", argument);
+      sendToAI(argument, []);
+    }
+  }, []);
 
-const buildSystemPrompt = () => {
+  const buildSystemPrompt = () => {
     const personalityPrompt =
       PERSONALITY_PROMPTS[personality?.id] ||
       `You are an intelligent debater opposing the user's argument.`;
@@ -61,7 +61,7 @@ STRICT RULES:
 - End with a sharp question or challenge to the user`;
   };
 
-const sendToAI = async (userMessage, existingMessages) => {
+  const sendToAI = async (userMessage, existingMessages) => {
     setIsLoading(true);
     try {
       const history = existingMessages.map((m) => ({
@@ -71,8 +71,11 @@ const sendToAI = async (userMessage, existingMessages) => {
 
       history.push({ role: "user", content: userMessage });
 
-      // ✅ Now calling YOUR backend instead of Anthropic directly
-      const response = await fetch("http://localhost:5000/api/debate", {
+      // 🛰️ DYNAMIC URL CONFIGURATION
+      // Reads from Vercel's environment variables in production, or uses localhost for local dev.
+      const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:5000";
+
+      const response = await fetch(`${API_BASE_URL}/api/debate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
