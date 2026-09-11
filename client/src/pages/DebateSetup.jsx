@@ -1,45 +1,8 @@
 import { useState, useContext } from "react";
 import { useNavigate } from "react-router-dom";
 import { DebateContext } from "../context/DebateContext.jsx";
-
-const PERSONALITIES = [
-  {
-    id: "lawyer",
-    emoji: "⚖️",
-    name: "Lawyer",
-    description: "Argues with legal precision and structured logic",
-  },
-  {
-    id: "doctor",
-    emoji: "🩺",
-    name: "Doctor",
-    description: "Debates using clinical evidence and medical reasoning",
-  },
-  {
-    id: "scientist",
-    emoji: "🔬",
-    name: "Scientist",
-    description: "Relies on data, research, and empirical facts",
-  },
-  {
-    id: "philosopher",
-    emoji: "🧠",
-    name: "Philosopher",
-    description: "Questions assumptions with deep critical thinking",
-  },
-  {
-    id: "economist",
-    emoji: "📊",
-    name: "Economist",
-    description: "Frames every issue through economics and incentives",
-  },
-  {
-    id: "journalist",
-    emoji: "📰",
-    name: "Journalist",
-    description: "Probes with sharp questions and seeks the truth",
-  },
-];
+import { PERSONALITIES } from "../constants/personalities.js";
+import { debatesApi } from "../api/client.js";
 
 const DebateSetup = () => {
   const navigate = useNavigate();
@@ -50,25 +13,47 @@ const DebateSetup = () => {
   const [stance, setStance] = useState("agree");
   const [selectedPersonality, setSelectedPersonality] = useState(null);
   const [errors, setErrors] = useState({});
+  const [submitting, setSubmitting] = useState(false);
 
   const validate = () => {
     const newErrors = {};
-    if (!topic.trim()) newErrors.topic = "Please enter a debate topic.";
-    if (!argument.trim()) newErrors.argument = "Please enter your argument.";
+    if (!topic.trim() || topic.trim().length < 5) newErrors.topic = "Please enter a debate topic (min 5 chars).";
+    if (!argument.trim() || argument.trim().length < 10) newErrors.argument = "Please enter your argument (min 10 chars).";
     if (!selectedPersonality) newErrors.personality = "Please select a debate personality.";
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
 
-  const handleSubmit = () => {
-    if (!validate()) return;
-    setDebateConfig({
-      topic,
-      argument,
-      stance,
-      personality: PERSONALITIES.find((p) => p.id === selectedPersonality),
-    });
-    navigate("/chat");
+  const handleSubmit = async () => {
+    if (!validate() || submitting) return;
+    const personality = PERSONALITIES.find((p) => p.id === selectedPersonality);
+    const stanceForBackend = stance === "agree" ? "for" : "against";
+    setSubmitting(true);
+    try {
+      // Full-stack: persist + get first AI reply from server (server owns prompts)
+      const data = await debatesApi.create({
+        topic: topic.trim(),
+        openingArgument: argument.trim(),
+        stance: stanceForBackend,
+        personalityId: personality.id,
+      });
+      setDebateConfig({
+        topic: topic.trim(),
+        argument: argument.trim(),
+        stance,
+        personality,
+        debateId: data.debateId || null,
+        persisted: Boolean(data.persisted && data.debateId),
+        initialReply: data.reply || null,
+      });
+      navigate(data.debateId ? `/chat/${data.debateId}` : "/chat");
+    } catch (err) {
+      // Fallback to local-only mode so UI never blocks without DB
+      setDebateConfig({ topic: topic.trim(), argument: argument.trim(), stance, personality, debateId: null, persisted: false });
+      navigate("/chat");
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -375,8 +360,8 @@ const DebateSetup = () => {
           </div>
 
           {/* Submit */}
-          <button className="submit-btn" onClick={handleSubmit}>
-            Start Debate
+          <button className="submit-btn" onClick={handleSubmit} disabled={submitting}>
+            {submitting ? "Starting..." : "Start Debate"}
           </button>
 
         </div>

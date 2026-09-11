@@ -1,21 +1,37 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { feedbackApi } from "../api/client.js";
+import { useDebate } from "../context/DebateContext";
 
 const Feedback = () => {
   const navigate = useNavigate();
+  const { debateConfig } = useDebate();
   const [rating, setRating] = useState(0);
   const [hovered, setHovered] = useState(0);
   const [feedback, setFeedback] = useState("");
   const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (rating === 0) {
       setError("Please select a rating before submitting.");
       return;
     }
     setError("");
-    setSubmitted(true);
+    setSaving(true);
+    try {
+      await feedbackApi.submit({
+        debateId: debateConfig?.debateId || undefined,
+        rating,
+        comment: feedback.slice(0, 1000),
+      });
+    } catch {
+      // still show success — feedback is best-effort offline
+    } finally {
+      setSaving(false);
+      setSubmitted(true);
+    }
   };
 
   if (submitted) {
@@ -288,8 +304,8 @@ const Feedback = () => {
 
             {error && <p className="error-msg">{error}</p>}
 
-            <button className="submit-btn" onClick={handleSubmit}>
-              Submit Feedback
+            <button className="submit-btn" onClick={handleSubmit} disabled={saving}>
+              {saving ? "Submitting..." : "Submit Feedback"}
             </button>
 
           </div>

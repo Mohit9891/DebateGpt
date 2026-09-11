@@ -1,25 +1,23 @@
 import { useState, useRef, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { useDebate } from "../context/DebateContext";
-
-const PERSONALITY_PROMPTS = {
-  lawyer: `You are a sharp courtroom lawyer debating the user. Use simple, clear legal reasoning. Be direct and aggressive but easy to understand. No fancy words. Hit hard, hit fast.`,
-  
-  doctor: `You are a confident doctor debating the user. Use simple health facts and evidence. Speak plainly — like explaining to a patient, not a colleague. Short and direct.`,
-  
-  scientist: `You are a no-nonsense scientist debating the user. Use real facts and data but explain them simply. No jargon. Keep it sharp and easy to follow.`,
-  
-  philosopher: `You are a sharp philosopher debating the user. Ask tough questions. Challenge assumptions. Use everyday language — think less Aristotle, more street-smart thinker.`,
-  
-  economist: `You are a straight-talking economist debating the user. Use simple logic, numbers, and real-world examples. No textbook language. Keep it punchy.`,
-  
-  journalist: `You are a bold investigative journalist debating the user. Ask sharp questions. Demand proof. Speak like you're live on air — clear, fast, confident.`,
-};
+import { useAuth } from "../context/AuthContext";
+import { debatesApi } from "../api/client.js";
 
 const DebateChat = () => {
   const navigate = useNavigate();
-  const { debateConfig, messages, addMessage } = useDebate();
+  const { id: routeId } = useParams();
+  const { user } = useAuth();
+  const { debateConfig, messages, addMessage, setMessages, setDebateConfig } = useDebate();
   const { topic, argument, stance, personality } = debateConfig;
+  const debateId = routeId || debateConfig.debateId || null;
+
+  const handleEndDebate = () => {
+    const target = debateId ? `/summary/${debateId}` : "/summary";
+    // Summary needs login — guests go through login first, then continue
+    if (!user) navigate(`/login?next=${encodeURIComponent(target)}`);
+    else navigate(target);
+  };
 
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -32,61 +30,71 @@ const DebateChat = () => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isLoading]);
 
-  // Send opening argument automatically on first load
+  // Hydrate from backend when opening /chat/:id directly (refresh-safe)
   useEffect(() => {
+    if (!routeId || messages.length > 0) return;
+    (async () => {
+      try {
+        const data = await debatesApi.get(routeId);
+        const d = data.debate;
+        setDebateConfig((prev) => ({
+          ...prev,
+          topic: d.topic,
+          argument: d.openingArgument,
+          stance: d.stance === "for" ? "agree" : "disagree",
+          personality: { id: d.personalityId, name: d.personalityId, emoji: prev.personality?.emoji || "🤖" },
+          debateId: d._id,
+          persisted: true,
+        }));
+        setMessages(
+          (data.messages || []).map((m) => ({
+            role: m.role === "assistant" ? "ai" : "user",
+            content: m.content,
+            time: new Date(m.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+          }))
+        );
+      } catch {
+        // leave guard below to show setup prompt
+      }
+    })();
+  }, [routeId]);
+
+  // Send opening argument automatically on first load (local flow)
+  // If Setup already fetched initialReply via POST /create, just render it.
+  useEffect(() => {
+    if (routeId) return; // backend already has both messages
     if (!hasStarted.current && topic && argument && personality) {
       hasStarted.current = true;
       addMessage("user", argument);
-      sendToAI(argument, []);
+      if (debateConfig.initialReply) {
+        addMessage("ai", debateConfig.initialReply);
+      } else {
+        sendToAI(argument, []);
+      }
     }
   }, []);
-
-  const buildSystemPrompt = () => {
-    const personalityPrompt =
-      PERSONALITY_PROMPTS[personality?.id] ||
-      `You are an intelligent debater opposing the user's argument.`;
-
-    return `${personalityPrompt}
-
-The debate topic is: "${topic}"
-The user's stance is: ${stance === "agree" ? "IN FAVOR of" : "AGAINST"} the topic.
-You must take the OPPOSITE stance — argue ${stance === "agree" ? "AGAINST" : "IN FAVOR of"} "${topic}".
-Stay in character throughout. Do not break the fourth wall.
-
-STRICT RULES:
-- Max 3 sentences per response
-- Use simple everyday English only
-- No long paragraphs — be crisp and punchy
-- One strong argument per reply, not five weak ones
-- End with a sharp question or challenge to the user`;
-  };
 
   const sendToAI = async (userMessage, existingMessages) => {
     setIsLoading(true);
     try {
-      const history = existingMessages.map((m) => ({
+      // Persisted debate → server owns prompts + history, no stale closure
+      if (debateId) {
+        const data = await debatesApi.sendMessage(debateId, userMessage);
+        addMessage("ai", data?.reply || "I couldn't generate a response. Please try again.");
+        return;
+      }
+      // Legacy stateless fallback — server builds system prompt from topic/stance/personalityId
+      const history = [...existingMessages, { role: "user", content: userMessage }].map((m) => ({
         role: m.role === "user" ? "user" : "assistant",
         content: m.content,
       }));
-
-      history.push({ role: "user", content: userMessage });
-
-      // 🛰️ DYNAMIC URL CONFIGURATION
-      // Reads from Vercel's environment variables in production, or uses localhost for local dev.
-      const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:5000";
-
-      const response = await fetch(`${API_BASE_URL}/api/debate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          messages: history,
-          system: buildSystemPrompt(),
-        }),
+      const data = await debatesApi.legacyChat({
+        messages: history,
+        topic,
+        stance: stance === "agree" ? "for" : "against",
+        personalityId: personality?.id,
       });
-
-      const data = await response.json();
-      const aiText = data?.reply || "I couldn't generate a response. Please try again.";
-      addMessage("ai", aiText);
+      addMessage("ai", data?.reply || "I couldn't generate a response. Please try again.");
     } catch (err) {
       addMessage("ai", "Something went wrong. Please check your connection and try again.");
     } finally {
@@ -97,9 +105,10 @@ STRICT RULES:
   const handleSend = () => {
     const trimmed = input.trim();
     if (!trimmed || isLoading) return;
+    const snapshot = [...messages];
     addMessage("user", trimmed);
     setInput("");
-    sendToAI(trimmed, messages);
+    sendToAI(trimmed, snapshot);
     inputRef.current?.focus();
   };
 
@@ -110,8 +119,8 @@ STRICT RULES:
     }
   };
 
-  // Guard: redirect if no config
-  if (!topic || !personality) {
+  // Guard: allow direct /chat/:id links (hydrating above), else require setup
+  if (!routeId && (!topic || !personality)) {
     return (
       <div style={{ textAlign: "center", padding: "80px 24px" }}>
         <p style={{ color: "#6b7280", marginBottom: "16px" }}>
@@ -420,8 +429,8 @@ STRICT RULES:
             >
               {stance === "agree" ? "In Favor" : "Against"}
             </span>
-            <button className="end-btn" onClick={() => navigate("/summary")}>
-              End Debate
+            <button className="end-btn" onClick={handleEndDebate} title={user ? "End Debate" : "Login required for summary"}>
+              {user ? "End Debate" : "Login to See Summary"}
             </button>
           </div>
         </div>

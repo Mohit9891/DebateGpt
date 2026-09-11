@@ -6,8 +6,10 @@ export const DebateProvider = ({ children }) => {
   const [debateConfig, setDebateConfig] = useState({
     topic: "",
     argument: "",
-    stance: "agree",
+    stance: "agree", // "agree" = for, "disagree" = against (kept for existing UI)
     personality: null,
+    debateId: null,
+    persisted: false,
   });
 
   const [messages, setMessages] = useState([]);
@@ -24,7 +26,7 @@ export const DebateProvider = ({ children }) => {
   };
 
   const resetDebate = () => {
-    setDebateConfig({ topic: "", argument: "", stance: "agree", personality: null });
+    setDebateConfig({ topic: "", argument: "", stance: "agree", personality: null, debateId: null, persisted: false });
     setMessages([]);
   };
 

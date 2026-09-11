@@ -1,16 +1,41 @@
-import { useNavigate } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { useNavigate, useParams } from "react-router-dom";
 import { useDebate } from "../context/DebateContext";
+import { debatesApi } from "../api/client.js";
 
 const ArgumentSummary = () => {
   const navigate = useNavigate();
+  const { id: routeId } = useParams();
   const { debateConfig, messages, resetDebate } = useDebate();
-  const { topic, personality, stance } = debateConfig;
+  const { topic, personality, stance, debateId } = debateConfig;
+  const effectiveId = routeId || debateId || null;
+  const [serverSummary, setServerSummary] = useState(null);
 
-  // Split messages into user and AI
+  useEffect(() => {
+    if (!effectiveId) return;
+    debatesApi.summary(effectiveId).then(setServerSummary).catch((e) => {
+      // Session expired mid-page → send back through login, return here after
+      if (e.loginRequired) navigate(`/login?next=${encodeURIComponent(window.location.pathname)}`);
+    });
+  }, [effectiveId]);
+
+  // Split messages into user and AI (local fallback; server summary preferred when present)
   const userMessages = messages.filter((m) => m.role === "user");
   const aiMessages = messages.filter((m) => m.role === "ai");
 
-  const handleSave = () => {
+  const handleSave = async () => {
+    try {
+      if (effectiveId) {
+        // Server-generated sanitized download (Firefox-safe)
+        const BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:5000";
+        const a = document.createElement("a");
+        a.href = `${BASE}/api/debates/${effectiveId}/export`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        return;
+      }
+    } catch { /* fall through to local */ }
     const content = messages
       .map((m) => `[${m.time}] ${m.role === "user" ? "You" : personality?.name}: ${m.content}`)
       .join("\n\n");
@@ -18,28 +43,38 @@ const ArgumentSummary = () => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `debate-${topic?.slice(0, 30) || "summary"}.txt`;
+    const safe = (topic || "summary").replace(/[^\w\- ]+/g, "").slice(0, 30) || "summary";
+    a.download = `debate-${safe}.txt`;
+    document.body.appendChild(a);
     a.click();
+    a.remove();
     URL.revokeObjectURL(url);
   };
 
-  const handleShare = () => {
-    const text = `I just debated "${topic}" against an AI ${personality?.name} on DebateGpt!`;
-    if (navigator.share) {
-      navigator.share({ title: "DebateGpt", text });
-    } else {
-      navigator.clipboard.writeText(text);
-      alert("Copied to clipboard!");
+  const handleShare = async () => {
+    const text = `I just debated "${topic}" against an AI ${personality?.name} on DebateGPT!`;
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: "DebateGPT", text });
+      } else {
+        await navigator.clipboard.writeText(text);
+        alert("Copied to clipboard!");
+      }
+    } catch {
+      // user cancelled share — ignore
     }
   };
 
-  const handleReturnToSetup = () => {
+  const handleReturnToSetup = async () => {
+    try {
+      if (effectiveId) await debatesApi.end(effectiveId);
+    } catch { /* ignore */ }
     resetDebate();
     navigate("/setup");
   };
 
-  // Guard
-  if (!topic || messages.length === 0) {
+  // Guard — allow direct /summary/:id (serverSummary) even after refresh
+  if ((!topic || messages.length === 0) && !serverSummary) {
     return (
       <div style={{ textAlign: "center", padding: "80px 24px" }}>
         <p style={{ color: "#6b7280", marginBottom: "16px" }}>
@@ -273,7 +308,7 @@ const ArgumentSummary = () => {
               >
                 Your stance: {stance === "agree" ? "In Favor" : "Against"}
               </span>
-              <span className="meta-badge">{messages.length} exchanges</span>
+              <span className="meta-badge">{(serverSummary?.totalMessages ?? messages.length)} messages</span>
             </div>
           </div>
 
@@ -288,12 +323,12 @@ const ArgumentSummary = () => {
               <div className="stat-label">AI Responses</div>
             </div>
             <div className="stat-box">
-              <div className="stat-num">{messages.length}</div>
-              <div className="stat-label">Total Exchanges</div>
+              <div className="stat-num">{serverSummary?.totalMessages ?? messages.length}</div>
+              <div className="stat-label">Total Messages</div>
             </div>
             <div className="stat-box">
               <div className="stat-num">
-                {Math.max(1, Math.round(messages.reduce((a, m) => a + m.content.split(" ").length, 0) / 100 * 0.5))}m
+                {serverSummary?.estReadTimeMin ?? Math.max(1, Math.round(messages.reduce((a, m) => a + m.content.split(" ").length, 0) / 200))}m
               </div>
               <div className="stat-label">Est. Read Time</div>
             </div>
