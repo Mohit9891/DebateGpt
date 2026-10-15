@@ -13,14 +13,17 @@ export const DebateProvider = ({ children }) => {
   });
 
   const [messages, setMessages] = useState([]);
+  const [voiceMode, setVoiceMode] = useState(false);
+  const [timerSeconds, setTimerSeconds] = useState(0);
 
-  const addMessage = (role, content) => {
+  const addMessage = (role, content, sources = []) => {
     setMessages((prev) => [
       ...prev,
       {
         role,        // "user" | "ai"
         content,
         time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+        sources,
       },
     ]);
   };
@@ -28,6 +31,8 @@ export const DebateProvider = ({ children }) => {
   const resetDebate = () => {
     setDebateConfig({ topic: "", argument: "", stance: "agree", personality: null, debateId: null, persisted: false });
     setMessages([]);
+    setVoiceMode(false);
+    setTimerSeconds(0);
   };
 
   return (
@@ -39,6 +44,10 @@ export const DebateProvider = ({ children }) => {
         setMessages,
         addMessage,
         resetDebate,
+        voiceMode,
+        setVoiceMode,
+        timerSeconds,
+        setTimerSeconds,
       }}
     >
       {children}

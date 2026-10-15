@@ -5,6 +5,10 @@ const messageSchema = new mongoose.Schema(
     debateId: { type: mongoose.Schema.Types.ObjectId, ref: "Debate", required: true, index: true },
     role: { type: String, enum: ["user", "assistant"], required: true },
     content: { type: String, required: true, maxlength: 4000 },
+    sources: {
+      type: [{ chunk: String, source: String, sourceUrl: String, score: Number }],
+      default: [],
+    },
   },
   { timestamps: true }
 );

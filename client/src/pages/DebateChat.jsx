@@ -1,14 +1,19 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useDebate } from "../context/DebateContext";
 import { useAuth } from "../context/AuthContext";
 import { debatesApi } from "../api/client.js";
+import { useSpeechRecognition } from "../hooks/useSpeechRecognition.js";
+import { useSpeechSynthesis } from "../hooks/useSpeechSynthesis.js";
+import VoiceButton from "../components/VoiceButton.jsx";
+import TimerBar from "../components/TimerBar.jsx";
+import RAGBadge from "../components/RAGBadge.jsx";
 
 const DebateChat = () => {
   const navigate = useNavigate();
   const { id: routeId } = useParams();
   const { user } = useAuth();
-  const { debateConfig, messages, addMessage, setMessages, setDebateConfig } = useDebate();
+  const { debateConfig, messages, addMessage, setMessages, setDebateConfig, voiceMode, setVoiceMode, timerSeconds, setTimerSeconds } = useDebate();
   const { topic, argument, stance, personality } = debateConfig;
   const debateId = routeId || debateConfig.debateId || null;
 
@@ -21,9 +26,14 @@ const DebateChat = () => {
 
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [timerRunning, setTimerRunning] = useState(false);
   const hasStarted = useRef(false);
   const bottomRef = useRef(null);
   const inputRef = useRef(null);
+
+  const { transcript, isListening, startListening, stopListening, isSupported: sttSupported } = useSpeechRecognition();
+  const { speak, stop: stopSpeaking, isSpeaking, isSupported: ttsSupported } = useSpeechSynthesis();
+  const voiceSupported = sttSupported && ttsSupported;
 
   // Auto scroll to latest message
   useEffect(() => {
@@ -51,6 +61,7 @@ const DebateChat = () => {
             role: m.role === "assistant" ? "ai" : "user",
             content: m.content,
             time: new Date(m.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+            sources: m.sources || [],
           }))
         );
       } catch {
@@ -68,6 +79,10 @@ const DebateChat = () => {
       addMessage("user", argument);
       if (debateConfig.initialReply) {
         addMessage("ai", debateConfig.initialReply);
+        // Auto-speak the initial reply in voice mode
+        if (voiceMode && ttsSupported && debateConfig.initialReply) {
+          speak(debateConfig.initialReply);
+        }
       } else {
         sendToAI(argument, []);
       }
@@ -77,26 +92,35 @@ const DebateChat = () => {
   const sendToAI = async (userMessage, existingMessages) => {
     setIsLoading(true);
     try {
+      let reply;
+      let sources = [];
       // Persisted debate → server owns prompts + history, no stale closure
       if (debateId) {
         const data = await debatesApi.sendMessage(debateId, userMessage);
-        addMessage("ai", data?.reply || "I couldn't generate a response. Please try again.");
-        return;
+        reply = data?.reply || "I couldn't generate a response. Please try again.";
+        sources = data?.sources || [];
+      } else {
+        // Legacy stateless fallback — server builds system prompt from topic/stance/personalityId
+        const history = [...existingMessages, { role: "user", content: userMessage }].map((m) => ({
+          role: m.role === "user" ? "user" : "assistant",
+          content: m.content,
+        }));
+        const data = await debatesApi.legacyChat({
+          messages: history,
+          topic,
+          stance: stance === "agree" ? "for" : "against",
+          personalityId: personality?.id,
+        });
+        reply = data?.reply || "I couldn't generate a response. Please try again.";
+        sources = data?.sources || [];
       }
-      // Legacy stateless fallback — server builds system prompt from topic/stance/personalityId
-      const history = [...existingMessages, { role: "user", content: userMessage }].map((m) => ({
-        role: m.role === "user" ? "user" : "assistant",
-        content: m.content,
-      }));
-      const data = await debatesApi.legacyChat({
-        messages: history,
-        topic,
-        stance: stance === "agree" ? "for" : "against",
-        personalityId: personality?.id,
-      });
-      addMessage("ai", data?.reply || "I couldn't generate a response. Please try again.");
+      addMessage("ai", reply, sources);
+      // Auto-speak AI reply when voice mode is on
+      if (voiceMode && ttsSupported && reply) {
+        speak(reply);
+      }
     } catch (err) {
-      addMessage("ai", "Something went wrong. Please check your connection and try again.");
+      addMessage("ai", "Something went wrong. Please check your connection and try again.", []);
     } finally {
       setIsLoading(false);
     }
@@ -118,6 +142,48 @@ const DebateChat = () => {
       handleSend();
     }
   };
+
+  // --- Voice handlers ---
+  const handleMicToggle = useCallback(() => {
+    if (isListening) {
+      stopListening();
+    } else {
+      stopSpeaking(); // interrupt AI speech
+      setInput("");   // clear input display
+
+      startListening((finalText) => {
+        console.log("[Voice] transcript:", finalText);
+        if (!finalText?.trim()) return;
+        const snapshot = [...messages];
+        addMessage("user", finalText);
+        setInput("");
+        sendToAI(finalText, snapshot);
+      });
+    }
+  }, [isListening, messages, debateId, topic, stance, personality]);
+
+  const handleTimerTimeUp = () => {
+    setTimerRunning(false);
+    const trimmed = input.trim();
+    if (trimmed) {
+      const snapshot = [...messages];
+      addMessage("user", trimmed);
+      setInput("");
+      sendToAI(trimmed, snapshot);
+    }
+  };
+
+  // Start timer when AI finishes speaking (or immediately if no timer duration)
+  useEffect(() => {
+    if (!voiceMode || timerSeconds <= 0) return;
+    if (isLoading || isSpeaking) return;
+    setTimerRunning(true);
+  }, [voiceMode, timerSeconds, isLoading, isSpeaking]);
+
+  // Show live interim transcript in the input area
+  useEffect(() => {
+    if (isListening && transcript) setInput(transcript);
+  }, [transcript, isListening]);
 
   // Guard: allow direct /chat/:id links (hydrating above), else require setup
   if (!routeId && (!topic || !personality)) {
@@ -405,6 +471,171 @@ const DebateChat = () => {
         .h-user { font-weight: 700; color: #1d4ed8; }
         .h-ai   { font-weight: 700; color: #92400e; }
         .h-text { margin-top: 2px; color: #6b7280; }
+
+        /* Voice mode */
+        .voice-toggle {
+          padding: 4px 10px;
+          border-radius: 20px;
+          border: 1.5px solid #e5e7eb;
+          background: #f9fafb;
+          font-size: 0.75rem;
+          font-weight: 600;
+          cursor: pointer;
+          font-family: 'DM Sans', sans-serif;
+          color: #374151;
+          transition: all 0.15s;
+          white-space: nowrap;
+        }
+        .voice-toggle:hover { border-color: #111827; }
+        .voice-toggle.active {
+          background: #111827;
+          color: #fff;
+          border-color: #111827;
+        }
+
+        .timer-select {
+          padding: 4px 8px;
+          border-radius: 6px;
+          border: 1.5px solid #e5e7eb;
+          background: #fff;
+          font-size: 0.75rem;
+          font-family: 'DM Sans', sans-serif;
+          color: #374151;
+          cursor: pointer;
+          outline: none;
+        }
+
+        .voice-input-area {
+          flex-direction: column;
+          align-items: stretch;
+          gap: 8px;
+        }
+
+        .voice-btn {
+          width: 70px;
+          height: 70px;
+          border-radius: 50%;
+          border: 2px solid #e5e7eb;
+          background: #f9fafb;
+          color: #374151;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          cursor: pointer;
+          transition: all 0.15s;
+          flex-shrink: 0;
+          gap: 2px;
+        }
+        .voice-btn:hover:not(:disabled) { border-color: #111827; background: #f3f4f6; }
+        .voice-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+        .voice-btn.listening {
+          background: #fef2f2;
+          border-color: #dc2626;
+          color: #dc2626;
+          animation: mic-pulse 1.2s ease-in-out infinite;
+        }
+
+        .voice-btn-label {
+          font-size: 0.7rem;
+          font-weight: 600;
+          color: inherit;
+          margin-top: 4px;
+        }
+
+        @keyframes mic-pulse {
+          0%, 100% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.3); }
+          50% { box-shadow: 0 0 0 10px rgba(220, 38, 38, 0); }
+        }
+
+        .live-transcript {
+          font-size: 0.82rem;
+          color: #6b7280;
+          font-style: italic;
+          padding: 6px 10px;
+          background: #f9fafb;
+          border-radius: 6px;
+          border: 1px dashed #e5e7eb;
+          min-height: 20px;
+        }
+
+        .timer-bar-wrap {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          flex: 1;
+        }
+        .timer-bar-track {
+          flex: 1;
+          height: 6px;
+          background: #f3f4f6;
+          border-radius: 3px;
+          overflow: hidden;
+        }
+        .timer-bar-fill {
+          height: 100%;
+          border-radius: 3px;
+          transition: width 1s linear, background 0.3s;
+        }
+        .timer-bar-text {
+          font-family: 'Sora', sans-serif;
+          font-size: 0.8rem;
+          font-weight: 700;
+          min-width: 32px;
+          text-align: right;
+        }
+
+        /* RAG Badge */
+        .rag-badge {
+          margin-top: 8px;
+        }
+        .rag-badge-trigger {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          padding: 6px 10px;
+          background: #fef9c3;
+          border: 1px solid #eab308;
+          border-radius: 6px;
+          font-size: 0.72rem;
+          font-weight: 600;
+          color: #854d0e;
+          cursor: pointer;
+          font-family: 'DM Sans', sans-serif;
+          transition: background 0.15s;
+        }
+        .rag-badge-trigger:hover { background: #fde047; }
+        .rag-badge-content {
+          margin-top: 8px;
+          padding: 10px;
+          background: #fefce8;
+          border: 1px solid #eab308;
+          border-radius: 6px;
+          animation: fadeIn 0.15s ease-out;
+        }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
+        .rag-source {
+          padding: 8px 0;
+          border-bottom: 1px solid #fde047;
+        }
+        .rag-source:last-child { border-bottom: none; }
+        .rag-source-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 4px;
+        }
+        .rag-source-link {
+          font-size: 0.68rem;
+          color: #1d4ed8;
+          text-decoration: none;
+        }
+        .rag-source-link:hover { text-decoration: underline; }
+        .rag-source-text {
+          font-size: 0.78rem;
+          color: #4b5563;
+          line-height: 1.6;
+        }
       `}</style>
 
       <div className="chat-page">
@@ -429,6 +660,29 @@ const DebateChat = () => {
             >
               {stance === "agree" ? "In Favor" : "Against"}
             </span>
+            {voiceSupported && (
+              <>
+                <button
+                  className={`voice-toggle ${voiceMode ? "active" : ""}`}
+                  onClick={() => setVoiceMode(!voiceMode)}
+                  title={voiceMode ? "Disable voice mode" : "Enable voice mode"}
+                >
+                  {voiceMode ? "🔊 Voice" : "🔇 Voice"}
+                </button>
+                {voiceMode && (
+                  <select
+                    className="timer-select"
+                    value={timerSeconds}
+                    onChange={(e) => setTimerSeconds(Number(e.target.value))}
+                  >
+                    <option value={0}>No timer</option>
+                    <option value={30}>30s</option>
+                    <option value={60}>60s</option>
+                    <option value={90}>90s</option>
+                  </select>
+                )}
+              </>
+            )}
             <button className="end-btn" onClick={handleEndDebate} title={user ? "End Debate" : "Login required for summary"}>
               {user ? "End Debate" : "Login to See Summary"}
             </button>
@@ -454,6 +708,9 @@ const DebateChat = () => {
                     {msg.time} · {msg.role === "user" ? "You" : personality.name}
                   </div>
                   <div className="msg-bubble">{msg.content}</div>
+                  {msg.role === "ai" && msg.sources && msg.sources.length > 0 && (
+                    <RAGBadge sources={msg.sources} />
+                  )}
                 </div>
               ))}
 
@@ -474,24 +731,44 @@ const DebateChat = () => {
             </div>
 
             {/* Input */}
-            <div className="input-area">
-              <textarea
-                ref={inputRef}
-                className="chat-input"
-                placeholder="Type your follow-up argument or comment..."
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={handleKeyDown}
-                rows={1}
-              />
-              <button
-                className="send-btn"
-                onClick={handleSend}
-                disabled={isLoading || !input.trim()}
-              >
-                Send
-              </button>
-            </div>
+            {voiceMode && voiceSupported ? (
+              <div className="input-area voice-input-area">
+                <VoiceButton
+                  isListening={isListening}
+                  onToggle={handleMicToggle}
+                  disabled={isLoading || isSpeaking}
+                />
+                {timerSeconds > 0 && (
+                  <TimerBar
+                    duration={timerSeconds}
+                    isRunning={timerRunning}
+                    onTimeUp={handleTimerTimeUp}
+                  />
+                )}
+                {isListening && transcript && (
+                  <div className="live-transcript">{transcript}</div>
+                )}
+              </div>
+            ) : (
+              <div className="input-area">
+                <textarea
+                  ref={inputRef}
+                  className="chat-input"
+                  placeholder="Type your follow-up argument or comment..."
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  rows={1}
+                />
+                <button
+                  className="send-btn"
+                  onClick={handleSend}
+                  disabled={isLoading || !input.trim()}
+                >
+                  Send
+                </button>
+              </div>
+            )}
           </div>
 
           {/* History panel */}

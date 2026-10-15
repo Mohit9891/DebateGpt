@@ -10,6 +10,7 @@ import feedbackRoutes from "./routes/feedback.routes.js";
 import personalityRoutes from "./routes/personalities.routes.js";
 import authRoutes from "./routes/auth.routes.js";
 import analyticsRoutes from "./routes/analytics.routes.js";
+import knowledgeRoutes from "./routes/knowledge.routes.js";
 
 const app = express();
 app.use(helmet());
@@ -35,6 +36,7 @@ app.use("/api/debates", debateRoutes);
 app.use("/api/feedback", feedbackRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/api/analytics", analyticsRoutes);
+app.use("/api/knowledge", knowledgeRoutes);
 
 // Legacy single-shot route for the current frontend (POST /api/debate {messages, topic?, stance?, personalityId?})
 app.use("/api/debate", debateRoutes);

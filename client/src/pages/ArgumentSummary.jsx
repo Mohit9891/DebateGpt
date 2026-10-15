@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useDebate } from "../context/DebateContext";
 import { debatesApi } from "../api/client.js";
+import RAGBadge from "../components/RAGBadge.jsx";
 
 const ArgumentSummary = () => {
   const navigate = useNavigate();
@@ -332,6 +333,12 @@ const ArgumentSummary = () => {
               </div>
               <div className="stat-label">Est. Read Time</div>
             </div>
+            <div className="stat-box">
+              <div className="stat-num">
+                {aiMessages.filter((m) => m.sources && m.sources.length > 0).length} / {aiMessages.length}
+              </div>
+              <div className="stat-label">Fact Grounded</div>
+            </div>
           </div>
 
           {/* Two-column argument summary */}
@@ -356,6 +363,7 @@ const ArgumentSummary = () => {
                 <div key={i} className="arg-card">
                   <div className="arg-point">Point {i + 1}: {summarizePoint(msg.content)}</div>
                   <div className="arg-content">{msg.content}</div>
+                  {msg.sources && msg.sources.length > 0 && <RAGBadge sources={msg.sources} />}
                   <div className="arg-time">{msg.time}</div>
                 </div>
               ))}
